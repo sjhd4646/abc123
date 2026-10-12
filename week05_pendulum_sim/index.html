@@ -230,6 +230,17 @@
     trailPts.length = 0;
   }
 
+  // 统一重置入口：复位状态 + 恢复运行 + 校正时间戳（防止暂停/卡顿后的时间跳变）
+  // 该函数会被显式挂载到 window（见文件末尾），因此无论按钮使用
+  // addEventListener 还是内联 onclick="resetAnimation()"，都能正确命中。
+  function resetAnimation(){
+    reset();
+    paused = false;
+    dragging = false;
+    last = performance.now();
+    acc = 0;
+  }
+
   /* ========== 固定步长积分（半隐式/辛欧拉，长期保能量） ========== */
   const FIXED = 1 / 300;
   let acc = 0;
@@ -466,7 +477,7 @@
 
   window.addEventListener('keydown', e => {
     if(e.code === 'Space'){ e.preventDefault(); paused = !paused; last = performance.now(); }
-    if(e.key === 'r' || e.key === 'R'){ reset(); paused = false; }
+    if(e.key === 'r' || e.key === 'R'){ resetAnimation(); }
   });
 
   /* ================= 控件绑定：滑块 + 重置按钮 ================= */
@@ -496,11 +507,14 @@
     CFG.damping = parseFloat(sD.value);
     syncDLabel();
   });
-  btn.addEventListener('click', () => {
-    reset();                          // 球回 45°，角速度清零，轨迹清空
-    paused = false;
-    last = performance.now();
-  });
+  btn.addEventListener('click', resetAnimation);
+
+  // 关键修复：把重置入口显式暴露到全局作用域。
+  // 内联 onclick 属性的处理函数在全局作用域中求值（作用域链为
+  // [元素 → form → document → window]），无法访问 IIFE 内部的任何标识符；
+  // 若不挂载到 window，任何内联 onclick="resetAnimation()" 调用都会抛出
+  // Uncaught ReferenceError: resetAnimation is not defined
+  window.resetAnimation = resetAnimation;
 
   /* ================= 启动 ================= */
   syncLenLabel(); syncGLabel(); syncDLabel();
