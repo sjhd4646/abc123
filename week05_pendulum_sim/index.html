@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>单摆简谐振动模拟器 | Pendulum Simulator</title>
+<title>双摆混沌模拟器 | Double Pendulum Simulator</title>
 <style>
   :root{
     --bg:#1a1a24;
@@ -38,7 +38,7 @@
     font-size:12px;
     line-height:1.7;
     letter-spacing:.02em;
-    min-width:238px;
+    min-width:246px;
     user-select:none;
   }
   .hud h1{
@@ -113,7 +113,7 @@
     cursor:pointer;transition:all .15s;font-family:inherit;min-width:120px;
   }
   .btn:hover{
-    background:linear-gradient(180deg, rgba(56,189,248,0.32), rgba(56,189,238,0.14));
+    background:linear-gradient(180deg, rgba(56,189,248,0.32), rgba(56,189,248,0.14));
     border-color:rgba(56,189,248,0.8);
     box-shadow:0 0 18px rgba(56,189,248,0.35);
     color:#ffffff;
@@ -132,28 +132,29 @@
 <canvas id="stage"></canvas>
 
 <div class="hud">
-  <h1><span class="dot"></span>Pendulum · 单摆</h1>
-  <div class="row"><span class="k">摆长 L</span><span class="v" id="v-len">—</span></div>
+  <h1><span class="dot"></span>Double Pendulum · 双摆</h1>
+  <div class="row"><span class="k">摆长 l₁ = l₂</span><span class="v" id="v-len">—</span></div>
+  <div class="row"><span class="k">质量 m₁ = m₂</span><span class="v">1.00 kg</span></div>
   <div class="row"><span class="k">重力 g</span><span class="v" id="v-g">—</span></div>
-  <div class="row"><span class="k">初始角 θ₀</span><span class="v" id="v-th0">—</span></div>
+  <div class="row"><span class="k">初始角 θ₁₀ = θ₂₀</span><span class="v" id="v-th0">—</span></div>
   <div class="divider"></div>
-  <div class="row hl"><span class="k">实时角度 θ</span><span class="v" id="v-th">—</span></div>
-  <div class="row hl"><span class="k">角速度 ω</span><span class="v" id="v-om">—</span></div>
-  <div class="row"><span class="k">理论周期 T</span><span class="v" id="v-T">—</span></div>
+  <div class="row hl"><span class="k">角度 θ₁ / θ₂</span><span class="v" id="v-th">—</span></div>
+  <div class="row hl"><span class="k">角速度 ω₁ / ω₂</span><span class="v" id="v-om">—</span></div>
   <div class="row"><span class="k">机械能 E</span><span class="v" id="v-E">—</span></div>
+  <div class="row"><span class="k">能量漂移 |ΔE|</span><span class="v" id="v-dE">—</span></div>
 </div>
 
-<div class="badge">Canvas · 原生无依赖</div>
+<div class="badge">Canvas · RK4 · 无依赖</div>
 <div class="tips">
-  <span><b>拖动</b> 摆球调整角度</span>
+  <span><b>拖动</b> 任一摆球改变角度</span>
   <span><b>空格</b> 暂停 / 继续</span>
   <span><b>R / 按钮</b> 重置</span>
 </div>
 
 <aside class="panel" aria-label="参数控制面板">
   <div class="ctrl">
-    <label>摆长 L<span class="val" id="vl-len">200 px</span></label>
-    <input type="range" id="s-len" min="100" max="350" step="1" value="200">
+    <label>总摆长 L<span class="val" id="vl-len">260 px</span></label>
+    <input type="range" id="s-len" min="100" max="350" step="1" value="260">
   </div>
   <div class="ctrl">
     <label>重力 g<span class="val" id="vl-g">9.80 m/s²</span></label>
@@ -173,26 +174,34 @@
   /* ================= 初始参数 ================= */
   const PANEL_H = 96;                          // 与 CSS .panel 高度保持一致
   const CFG = {
-    L: 200,               // 摆长（像素，用于绘制）
+    totalLen: 260,        // 总摆长 px（l1 = l2 = totalLen / 2）
     g: 9.8,               // 重力加速度 m/s²
-    ppm: 100,             // 像素/米 映射：200px → 2.00m
-    theta0Deg: 45,        // 初始摆角（度）
-    ballR: 21,            // 摆球半径 px
-    damping: 0.0,         // 阻尼系数（0 = 理想无阻尼）
-    trail: 90             // 轨迹采样点数
+    ppm: 100,             // 像素/米 映射
+    theta0Deg: 90,        // 初始角：RK4 实测 90° 起步 60s 内球2 过顶 12 次
+                          //（45° 起步 E=11.2J，球2 无法过顶，不满足翻转验收）
+    damping: 0.0,         // 阻尼系数（0 = 保守系统）
+    r1: 15,               // 球1 半径 px
+    r2: 18,               // 球2 半径 px（彩虹主角）
+    trail: 300            // 彩虹拖尾采样点数
   };
+  const M1 = 1, M2 = 1;                       // 两摆质量 kg
 
   /* ================= Canvas 初始化 ================= */
   const canvas = document.getElementById('stage');
   const ctx = canvas.getContext('2d');
   let W = 0, H = 0, OX = 0, OY = 0;
-  let Lm = CFG.L / CFG.ppm;                    // 物理摆长（米），可被滑块改变
+  let L1m = 0, L2m = 0;                       // 物理摆长（米），由滑块联动
+
+  function syncLengths(){
+    const half = (CFG.totalLen / 2) / CFG.ppm;
+    L1m = half;
+    L2m = half;
+  }
 
   function fitStage(){
-    // 根据当前画布高度与摆长，自适应支点 OY，避免摆球越界
-    const top = 100;                           // 顶部至少留 100px（避开 HUD）
-    const bottomMargin = CFG.ballR + 24;       // 球底到 canvas 底的留白
-    const maxOY = H - CFG.L - bottomMargin;
+    const top = 100;
+    const bottomMargin = CFG.r2 + 24;
+    const maxOY = H - CFG.totalLen - bottomMargin;
     OY = Math.max(top, Math.min(H * 0.28, maxOY));
   }
 
@@ -210,58 +219,98 @@
   }
   window.addEventListener('resize', resize);
 
-  /* ================= 物理状态 ================= */
+  /* ================= 双摆物理：状态与方程 ================= */
+  // 状态向量 y = [θ1, ω1, θ2, ω2]，角度自竖直向下量取
   const THETA0 = CFG.theta0Deg * Math.PI / 180;
-  const state = { theta: THETA0, omega: 0, t: 0 };
-  const trailPts = [];
+  let y = [THETA0, 0, THETA0, 0];
+  let simT = 0;                                // 仿真累计时间（驱动色相流动）
+  let E0 = 0;                                  // 能量基准（用于漂移监测）
+  const trailPts = [];                         // {x, y, hue}
 
   let paused = false;
-  let dragging = false;
+  let dragBall = 0;                            // 0=无拖拽, 1=拖球1, 2=拖球2
 
-  // 完整非线性单摆方程：θ'' = -(g/L)·sinθ - c·θ'
-  function angularAccel(theta){
-    return -(CFG.g / Lm) * Math.sin(theta);
+  // 双摆显式微分方程组（经典拉格朗日推导结果）：
+  //   分母 den = 2m1 + m2 − m2·cos(2(θ1−θ2)) ≥ 2m1 > 0，无奇点
+  function derivs(y){
+    const t1 = y[0], w1 = y[1], t2 = y[2], w2 = y[3];
+    const d  = t1 - t2;
+    const sd = Math.sin(d), cd = Math.cos(d);
+    const den = 2*M1 + M2 - M2 * Math.cos(2*d);
+    const a1 = ( -CFG.g * (2*M1 + M2) * Math.sin(t1)
+                 - M2 * CFG.g * Math.sin(t1 - 2*t2)
+                 - 2 * sd * M2 * (w2*w2 * L2m + w1*w1 * L1m * cd)
+               ) / (L1m * den) - CFG.damping * w1;
+    const a2 = ( 2 * sd * ( w1*w1 * L1m * (M1 + M2)
+                 + CFG.g * (M1 + M2) * Math.cos(t1)
+                 + w2*w2 * L2m * M2 * cd )
+               ) / (L2m * den) - CFG.damping * w2;
+    return [w1, a1, w2, a2];
   }
+
+  // 机械能（最低点位能取 0）
+  function energy(){
+    const t1 = y[0], w1 = y[1], t2 = y[2], w2 = y[3];
+    const v1sq = L1m*L1m * w1*w1;
+    const v2sq = L1m*L1m * w1*w1 + L2m*L2m * w2*w2 + 2*L1m*L2m * w1*w2 * Math.cos(t1 - t2);
+    const ke = 0.5*M1*v1sq + 0.5*M2*v2sq;
+    const pe = -(M1 + M2)*CFG.g*L1m*Math.cos(t1) - M2*CFG.g*L2m*Math.cos(t2)
+               + (M1 + M2)*CFG.g*L1m + M2*CFG.g*L2m;
+    return ke + pe;
+  }
+
+  /* ================= RK4 数值积分（四阶龙格-库塔） ================= */
+  function rk4Step(y, dt){
+    const k1 = derivs(y);
+    const yA = [y[0] + k1[0]*dt/2, y[1] + k1[1]*dt/2, y[2] + k1[2]*dt/2, y[3] + k1[3]*dt/2];
+    const k2 = derivs(yA);
+    const yB = [y[0] + k2[0]*dt/2, y[1] + k2[1]*dt/2, y[2] + k2[2]*dt/2, y[3] + k2[3]*dt/2];
+    const k3 = derivs(yB);
+    const yC = [y[0] + k3[0]*dt, y[1] + k3[1]*dt, y[2] + k3[2]*dt, y[3] + k3[3]*dt];
+    const k4 = derivs(yC);
+    const out = new Array(4);
+    for(let i = 0; i < 4; i++){
+      out[i] = y[i] + dt/6 * (k1[i] + 2*k2[i] + 2*k3[i] + k4[i]);
+    }
+    return out;
+  }
+
+  const FIXED = 1 / 300;                       // 300 Hz 固定物理步长
+  let acc = 0;
 
   function reset(){
-    state.theta = THETA0;
-    state.omega = 0;
-    state.t = 0;
+    y = [THETA0, 0, THETA0, 0];
+    simT = 0;
     trailPts.length = 0;
+    E0 = energy();
   }
 
-  // 统一重置入口：复位状态 + 恢复运行 + 校正时间戳（防止暂停/卡顿后的时间跳变）
-  // 该函数会被显式挂载到 window（见文件末尾），因此无论按钮使用
-  // addEventListener 还是内联 onclick="resetAnimation()"，都能正确命中。
+  // 统一重置入口：复位状态 + 恢复运行 + 校正时间戳
   function resetAnimation(){
     reset();
     paused = false;
-    dragging = false;
+    dragBall = 0;
     last = performance.now();
     acc = 0;
   }
 
-  /* ========== 固定步长积分（半隐式/辛欧拉，长期保能量） ========== */
-  const FIXED = 1 / 300;
-  let acc = 0;
-
-  function physics(dt){
-    const a = angularAccel(state.theta) - CFG.damping * state.omega;
-    state.omega += a * dt;
-    state.theta += state.omega * dt;
-    state.t += dt;
+  /* ================= 几何位置 ================= */
+  function pivot1(){
+    const l = CFG.totalLen / 2;
+    return { x: OX + l * Math.sin(y[0]), y: OY + l * Math.cos(y[0]) };
+  }
+  function pivot2(){
+    const p1 = pivot1();
+    const l = CFG.totalLen / 2;
+    return { x: p1.x + l * Math.sin(y[2]), y: p1.y + l * Math.cos(y[2]) };
   }
 
   /* ================= 渲染 ================= */
-  function bobPos(theta){
-    return { x: OX + CFG.L * Math.sin(theta), y: OY + CFG.L * Math.cos(theta) };
-  }
-
   function drawBackground(){
     ctx.fillStyle = '#1a1a24';
     ctx.fillRect(0, 0, W, H);
 
-    const g1 = ctx.createRadialGradient(OX, OY + CFG.L * 0.5, 0, OX, OY + CFG.L * 0.5, Math.max(W, H) * 0.75);
+    const g1 = ctx.createRadialGradient(OX, OY + CFG.totalLen * 0.5, 0, OX, OY + CFG.totalLen * 0.5, Math.max(W, H) * 0.75);
     g1.addColorStop(0, 'rgba(56,189,248,0.055)');
     g1.addColorStop(1, 'rgba(26,26,36,0)');
     ctx.fillStyle = g1;
@@ -272,7 +321,7 @@
     ctx.lineWidth = 1;
     ctx.beginPath();
     for(let x = OX % step; x < W; x += step){ ctx.moveTo(x, 0); ctx.lineTo(x, H); }
-    for(let y = OY % step; y < H; y += step){ ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    for(let yy = OY % step; yy < H; yy += step){ ctx.moveTo(0, yy); ctx.lineTo(W, yy); }
     ctx.stroke();
 
     const g2 = ctx.createRadialGradient(OX, H * 0.45, Math.min(W, H) * 0.25, OX, H * 0.45, Math.max(W, H) * 0.85);
@@ -285,36 +334,25 @@
   function drawReference(){
     ctx.save();
     ctx.setLineDash([4, 8]);
-    ctx.strokeStyle = 'rgba(148,163,184,0.20)';
+    ctx.strokeStyle = 'rgba(148,163,184,0.18)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(OX, OY);
-    ctx.lineTo(OX, OY + CFG.L + CFG.ballR + 26);
+    ctx.lineTo(OX, OY + CFG.totalLen + CFG.r2 + 26);
     ctx.stroke();
     ctx.restore();
-
-    if(Math.abs(state.theta) > 0.01){
-      const R = CFG.L * 0.42;
-      const start = Math.PI / 2;
-      const end = Math.PI / 2 - state.theta;
-      ctx.save();
-      ctx.strokeStyle = 'rgba(56,189,248,0.30)';
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.arc(OX, OY, R, Math.min(start, end), Math.max(start, end));
-      ctx.stroke();
-      ctx.restore();
-    }
   }
 
+  // 彩虹渐变衰减拖尾：色相随时间流动，alpha/线宽沿拖尾平方衰减
   function drawTrail(){
-    if(trailPts.length < 2) return;
-    for(let i = 1; i < trailPts.length; i++){
+    const n = trailPts.length;
+    if(n < 2) return;
+    ctx.lineCap = 'round';
+    for(let i = 1; i < n; i++){
       const p0 = trailPts[i - 1], p1 = trailPts[i];
-      const k = i / trailPts.length;
-      ctx.strokeStyle = 'rgba(34,211,238,' + (k * 0.30).toFixed(3) + ')';
-      ctx.lineWidth = 1 + k * 2.2;
-      ctx.lineCap = 'round';
+      const k = i / n;                          // 0=尾 1=头（越新越亮）
+      ctx.strokeStyle = 'hsla(' + p1.hue + ',100%,62%,' + (k * k * 0.55).toFixed(3) + ')';
+      ctx.lineWidth = 0.6 + k * 2.6;
       ctx.beginPath();
       ctx.moveTo(p0.x, p0.y);
       ctx.lineTo(p1.x, p1.y);
@@ -322,8 +360,9 @@
     }
   }
 
-  function drawRod(bx, by){
-    const grad = ctx.createLinearGradient(OX, OY, bx, by);
+  function drawRods(p1, p2, hue){
+    // 杆1：支点 → 球1（青蓝系）
+    let grad = ctx.createLinearGradient(OX, OY, p1.x, p1.y);
     grad.addColorStop(0, 'rgba(148,163,184,0.85)');
     grad.addColorStop(1, 'rgba(56,189,248,0.95)');
     ctx.strokeStyle = grad;
@@ -331,7 +370,18 @@
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(OX, OY);
-    ctx.lineTo(bx, by);
+    ctx.lineTo(p1.x, p1.y);
+    ctx.stroke();
+
+    // 杆2：球1 → 球2（末端融入球2当前色相）
+    grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+    grad.addColorStop(0, 'rgba(148,163,184,0.75)');
+    grad.addColorStop(1, 'hsla(' + hue + ',95%,65%,0.95)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 2.0;
+    ctx.beginPath();
+    ctx.moveTo(p1.x, p1.y);
+    ctx.lineTo(p2.x, p2.y);
     ctx.stroke();
   }
 
@@ -352,42 +402,74 @@
     ctx.beginPath(); ctx.arc(OX, OY, 3, 0, Math.PI * 2); ctx.fill();
   }
 
-  function drawBob(bx, by){
-    const r = CFG.ballR;
-
-    const glow = ctx.createRadialGradient(bx, by, 0, bx, by, r * 4.2);
-    glow.addColorStop(0,   'rgba(34,211,238,0.38)');
-    glow.addColorStop(0.45,'rgba(56,189,248,0.11)');
+  // 球1：青蓝发光（沿用单摆质感）
+  function drawBob1(x, y_){
+    const r = CFG.r1;
+    const glow = ctx.createRadialGradient(x, y_, 0, x, y_, r * 4);
+    glow.addColorStop(0,   'rgba(34,211,238,0.34)');
+    glow.addColorStop(0.45,'rgba(56,189,248,0.10)');
     glow.addColorStop(1,   'rgba(56,189,248,0)');
     ctx.fillStyle = glow;
-    ctx.beginPath(); ctx.arc(bx, by, r * 4.2, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y_, r * 4, 0, Math.PI * 2); ctx.fill();
 
-    const body = ctx.createRadialGradient(bx - r * 0.35, by - r * 0.38, r * 0.08, bx, by, r * 1.05);
+    const body = ctx.createRadialGradient(x - r*0.35, y_ - r*0.38, r*0.08, x, y_, r*1.05);
     body.addColorStop(0,    '#f0fdff');
     body.addColorStop(0.32, '#7dd3fc');
     body.addColorStop(0.75, '#0ea5e9');
     body.addColorStop(1,    '#075985');
     ctx.save();
-    ctx.shadowBlur = 22;
-    ctx.shadowColor = 'rgba(34,211,238,0.85)';
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = 'rgba(34,211,238,0.8)';
     ctx.fillStyle = body;
-    ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y_, r, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
 
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
     ctx.beginPath();
-    ctx.ellipse(bx - r * 0.32, by - r * 0.36, r * 0.24, r * 0.17, -0.6, 0, Math.PI * 2);
+    ctx.ellipse(x - r*0.32, y_ - r*0.36, r*0.24, r*0.17, -0.6, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 球2：彩虹主角色（hue 随仿真时间流动）
+  function drawBob2(x, y_, hue){
+    const r = CFG.r2;
+    const glow = ctx.createRadialGradient(x, y_, 0, x, y_, r * 4.4);
+    glow.addColorStop(0,   'hsla(' + hue + ',100%,66%,0.40)');
+    glow.addColorStop(0.45,'hsla(' + hue + ',100%,60%,0.11)');
+    glow.addColorStop(1,   'hsla(' + hue + ',100%,60%,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(x, y_, r * 4.4, 0, Math.PI * 2); ctx.fill();
+
+    const body = ctx.createRadialGradient(x - r*0.35, y_ - r*0.38, r*0.08, x, y_, r*1.05);
+    body.addColorStop(0,    '#ffffff');
+    body.addColorStop(0.32, 'hsl(' + hue + ',95%,74%)');
+    body.addColorStop(0.75, 'hsl(' + hue + ',90%,52%)');
+    body.addColorStop(1,    'hsl(' + hue + ',85%,30%)');
+    ctx.save();
+    ctx.shadowBlur = 24;
+    ctx.shadowColor = 'hsla(' + hue + ',100%,60%,0.9)';
+    ctx.fillStyle = body;
+    ctx.beginPath(); ctx.arc(x, y_, r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.beginPath();
+    ctx.ellipse(x - r*0.32, y_ - r*0.36, r*0.24, r*0.17, -0.6, 0, Math.PI * 2);
     ctx.fill();
   }
 
   function render(){
     drawBackground();
     drawReference();
-    const p = bobPos(state.theta);
+
+    const hue = (simT * 40) % 360;             // 色相流速 40°/s
+    const p1 = pivot1(), p2 = pivot2();
+
     drawTrail();
-    drawRod(p.x, p.y);
+    drawRods(p1, p2, hue);
     drawPivot();
-    drawBob(p.x, p.y);
+    drawBob1(p1.x, p1.y);
+    drawBob2(p2.x, p2.y, hue);
   }
 
   /* ================= HUD ================= */
@@ -397,24 +479,27 @@
     th0: document.getElementById('v-th0'),
     th:  document.getElementById('v-th'),
     om:  document.getElementById('v-om'),
-    T:   document.getElementById('v-T'),
-    E:   document.getElementById('v-E')
+    E:   document.getElementById('v-E'),
+    dE:  document.getElementById('v-dE')
   };
   el.th0.textContent = CFG.theta0Deg.toFixed(1) + '°';
 
+  const fmtDeg = rad => {
+    let d = (rad * 180 / Math.PI) % 360;
+    if(d > 180) d -= 360;
+    if(d < -180) d += 360;
+    return (d >= 0 ? '+' : '') + d.toFixed(1) + '°';
+  };
+
   function updateHUD(){
-    el.len.textContent = CFG.L + ' px (' + Lm.toFixed(2) + ' m)';
+    el.len.textContent = (CFG.totalLen / 2).toFixed(0) + ' px ×2 (' + L1m.toFixed(2) + ' m)';
     el.g.textContent   = CFG.g.toFixed(2) + ' m/s²';
-    const deg = state.theta * 180 / Math.PI;
-    el.th.textContent = (deg >= 0 ? '+' : '') + deg.toFixed(2) + '°';
-    el.om.textContent = state.omega.toFixed(3) + ' rad/s';
+    el.th.textContent  = fmtDeg(y[0]) + ' / ' + fmtDeg(y[2]);
+    el.om.textContent  = y[1].toFixed(2) + ' / ' + y[3].toFixed(2) + ' rad/s';
 
-    const T = 2 * Math.PI * Math.sqrt(Lm / CFG.g);
-    el.T.textContent = T.toFixed(3) + ' s';
-
-    const v = Lm * state.omega;
-    const E = 0.5 * v * v + CFG.g * Lm * (1 - Math.cos(state.theta));
-    el.E.textContent = E.toFixed(3) + ' J';
+    const E = energy();
+    el.E.textContent  = E.toFixed(3) + ' J';
+    el.dE.textContent = Math.abs(E - E0).toExponential(1) + ' J';
   }
 
   /* ================= 主循环：requestAnimationFrame ================= */
@@ -424,14 +509,16 @@
     const dtReal = Math.min((now - last) / 1000, 0.05);
     last = now;
 
-    if(!paused && !dragging){
+    if(!paused && !dragBall){
       acc += dtReal;
       let guard = 0;
       while(acc >= FIXED && guard++ < 600){
-        physics(FIXED);
+        y = rk4Step(y, FIXED);
+        simT += FIXED;
         acc -= FIXED;
       }
-      trailPts.push(bobPos(state.theta));
+      const p2 = pivot2();
+      trailPts.push({ x: p2.x, y: p2.y, hue: (simT * 40) % 360 });
       if(trailPts.length > CFG.trail) trailPts.shift();
     }
 
@@ -440,7 +527,7 @@
     requestAnimationFrame(frame);
   }
 
-  /* ================= 交互 ================= */
+  /* ================= 鼠标拖拽：直接抓取摆球 ================= */
   function pointerPos(e){
     const r = canvas.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -448,28 +535,46 @@
 
   canvas.addEventListener('pointerdown', e => {
     const m = pointerPos(e);
-    const p = bobPos(state.theta);
-    if(Math.hypot(m.x - p.x, m.y - p.y) <= CFG.ballR * 2.6){
-      dragging = true;
-      paused = false;
-      acc = 0;
-      trailPts.length = 0;
-      canvas.classList.add('dragging');
-      try { canvas.setPointerCapture(e.pointerId); } catch(_){}
+    const p1 = pivot1(), p2 = pivot2();
+    const d1 = Math.hypot(m.x - p1.x, m.y - p1.y);
+    const d2 = Math.hypot(m.x - p2.x, m.y - p2.y);
+    const th1 = CFG.r1 * 3.2, th2 = CFG.r2 * 3.2;
+    if(d2 < th2 && d2 <= d1){
+      dragBall = 2;                            // 优先抓外侧彩虹球
+    }else if(d1 < th1){
+      dragBall = 1;
+    }else{
+      return;
     }
+    paused = false;
+    acc = 0;
+    trailPts.length = 0;
+    canvas.classList.add('dragging');
+    try { canvas.setPointerCapture(e.pointerId); } catch(_){}
   });
 
   canvas.addEventListener('pointermove', e => {
-    if(!dragging) return;
+    if(!dragBall) return;
     const m = pointerPos(e);
-    state.theta = Math.atan2(m.x - OX, m.y - OY);
-    state.omega = 0;
+    if(dragBall === 1){
+      // 抓球1：θ1 由鼠标相对支点方位决定，θ2 保持
+      y[0] = Math.atan2(m.x - OX, m.y - OY);
+      y[1] = 0;
+      y[3] = 0;
+    }else{
+      // 抓球2：θ2 由鼠标相对球1 当前位置方位决定
+      const p1 = pivot1();
+      y[2] = Math.atan2(m.x - p1.x, m.y - p1.y);
+      y[1] = 0;
+      y[3] = 0;
+    }
   });
 
   function endDrag(e){
-    if(!dragging) return;
-    dragging = false;
+    if(!dragBall) return;
+    dragBall = 0;
     canvas.classList.remove('dragging');
+    E0 = energy();                             // 释放后以当前能量为新基准
     try { canvas.releasePointerCapture(e.pointerId); } catch(_){}
   }
   canvas.addEventListener('pointerup', endDrag);
@@ -489,18 +594,20 @@
   const vD   = document.getElementById('vl-d');
   const btn  = document.getElementById('btn-reset');
 
-  function syncLenLabel(){ vLen.textContent = CFG.L.toFixed(0) + ' px (' + Lm.toFixed(2) + ' m)'; }
+  function syncLenLabel(){ vLen.textContent = CFG.totalLen.toFixed(0) + ' px'; }
   function syncGLabel(){ vG.textContent = CFG.g.toFixed(2) + ' m/s²'; }
   function syncDLabel(){ vD.textContent = CFG.damping.toFixed(4); }
 
   sLen.addEventListener('input', () => {
-    CFG.L = parseFloat(sLen.value);
-    Lm = CFG.L / CFG.ppm;
-    fitStage();                       // 摆长变化时同步支点，避免越界
+    CFG.totalLen = parseFloat(sLen.value);
+    syncLengths();
+    fitStage();
+    E0 = energy();                             // 摆长改变 → 能量基准重记
     syncLenLabel();
   });
   sG.addEventListener('input', () => {
     CFG.g = parseFloat(sG.value);
+    E0 = energy();                             // 重力改变 → 能量基准重记
     syncGLabel();
   });
   sD.addEventListener('input', () => {
@@ -509,16 +616,15 @@
   });
   btn.addEventListener('click', resetAnimation);
 
-  // 关键修复：把重置入口显式暴露到全局作用域。
-  // 内联 onclick 属性的处理函数在全局作用域中求值（作用域链为
-  // [元素 → form → document → window]），无法访问 IIFE 内部的任何标识符；
-  // 若不挂载到 window，任何内联 onclick="resetAnimation()" 调用都会抛出
-  // Uncaught ReferenceError: resetAnimation is not defined
+  // 作用域说明：内联 onclick 处理器在全局作用域求值，无法访问 IIFE 内部
+  // 标识符，故显式挂载到 window，使 addEventListener 与内联调用双通道兼容
   window.resetAnimation = resetAnimation;
 
   /* ================= 启动 ================= */
+  syncLengths();
   syncLenLabel(); syncGLabel(); syncDLabel();
   resize();
+  reset();
   requestAnimationFrame(frame);
 })();
 </script>
