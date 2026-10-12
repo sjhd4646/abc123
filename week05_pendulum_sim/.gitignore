@@ -1,0 +1,23 @@
+# Week 05 Pendulum Simulation — local ignore rules
+# Keep the sterile workspace free of IDE/OS noise.
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.venv/
+venv/
+
+# Experiment outputs (regenerated every run)
+results/
+data/raw/
+*.log
+*.tmp
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
